@@ -5,4 +5,5 @@ RUN apk add --no-cache python3 py3-pip jq ffmpeg && \
 
 COPY rootfs /
 COPY proxy.py /proxy.py
-RUN chmod +x /etc/services.d/lanta-cam-proxy/run
+RUN sed -i 's/\r$//' /etc/services.d/lanta-cam-proxy/run && \
+    chmod +x /etc/services.d/lanta-cam-proxy/run
