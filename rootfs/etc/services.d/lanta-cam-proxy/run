@@ -1,6 +1,0 @@
-#!/bin/sh
-export LANTA_PHONE=$(jq -r '.phone // empty' /data/options.json)
-export LANTA_TOKEN=$(jq -r '.bearer_token // empty' /data/options.json)
-export TOKEN_REFRESH_INTERVAL=$(jq -r '.refresh_interval // 5400' /data/options.json)
-export PORT=8199
-exec python3 /proxy.py
