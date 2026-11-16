@@ -1,25 +1,61 @@
-import asyncio, json, logging, os, re, ssl, time, uuid
+import asyncio, json, logging, os, re, socket, ssl, time, uuid
 import aiohttp
 from aiohttp import web
+from aiohttp.abc import AbstractResolver
 
 FFMPEG = os.environ.get("FFMPEG_PATH", "ffmpeg")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("lanta-proxy")
 
-ssl_ctx = ssl.create_default_context()
-ssl_ctx.check_hostname = False
-ssl_ctx.verify_mode = ssl.CERT_NONE
+# Нормальный SSL контекст с поддержкой SNI (чтобы nginx открывал именно mobile.lanta-net.ru, а не lanta-net.ru!)
+api_ssl = ssl.create_default_context()
 
-API_BASE = "https://lanta-net.ru"
+# Для видеосерверов fl4/fl7 с самоподписанными/неполными цепочками оставляем мягкий SSL
+stream_ssl = ssl.create_default_context()
+stream_ssl.check_hostname = False
+stream_ssl.verify_mode = ssl.CERT_NONE
+
+API_HOST = "mobile.lanta-net.ru"
+API_IP = "37.128.241.40"
+API_BASE = f"https://{API_HOST}"
+
 PHONE_CFG = os.environ.get("LANTA_PHONE", "").strip()
 TOKEN_CFG = os.environ.get("LANTA_TOKEN", "").strip()
+HOUSE_CFG = os.environ.get("LANTA_HOUSE_ID", "").strip()
 REFRESH_INT = int(os.environ.get("TOKEN_REFRESH_INTERVAL", "5400"))
 PORT = int(os.environ.get("PORT", "8199"))
 STATE_FILE = "/data/lanta_auth.json"
 
 cameras = {}
 last_refresh = 0
-_session = None
+_api_session = None
+_stream_session = None
+
+
+class LantaResolver(AbstractResolver):
+    async def resolve(self, host, port=0, family=socket.AF_INET):
+        if host == API_HOST:
+            return [{
+                "hostname": host,
+                "host": API_IP,
+                "port": port or 443,
+                "family": socket.AF_INET,
+                "proto": 0,
+                "flags": socket.AI_NUMERICHOST,
+            }]
+        loop = asyncio.get_running_loop()
+        infos = await loop.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        return [{
+            "hostname": host,
+            "host": info[4][0],
+            "port": info[4][1],
+            "family": info[0],
+            "proto": info[2],
+            "flags": 0,
+        } for info in infos]
+
+    async def close(self):
+        pass
 
 
 def norm_phone(p: str) -> str:
@@ -56,27 +92,39 @@ def load_state() -> dict:
 state = load_state()
 
 
-async def http_sess() -> aiohttp.ClientSession:
-    global _session
-    if _session is None or _session.closed:
-        _session = aiohttp.ClientSession(
-            connector=aiohttp.TCPConnector(ssl=ssl_ctx),
+async def api_sess() -> aiohttp.ClientSession:
+    global _api_session
+    if _api_session is None or _api_session.closed:
+        conn = aiohttp.TCPConnector(ssl=api_ssl, resolver=LantaResolver())
+        _api_session = aiohttp.ClientSession(
+            connector=conn,
             headers={
+                "Host": API_HOST,
                 "Origin": API_BASE,
                 "Referer": f"{API_BASE}/addresses",
                 "Accept": "application/json, text/plain, */*",
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/130.0.0.0",
             },
         )
-    return _session
+    return _api_session
+
+
+async def http_sess() -> aiohttp.ClientSession:
+    global _stream_session
+    if _stream_session is None or _stream_session.closed:
+        _stream_session = aiohttp.ClientSession(
+            connector=aiohttp.TCPConnector(ssl=stream_ssl),
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/130.0.0.0"},
+        )
+    return _stream_session
 
 
 async def api_post(path: str, payload: dict | None = None):
     tok = state.get("token", "").strip()
     hdr = {"Authorization": f"Bearer {tok}" if tok else "Bearer"}
-    s = await http_sess()
+    s = await api_sess()
     if payload is None:
-        req_kw = {"headers": hdr}
+        req_kw = {"headers": hdr, "data": b""}
     else:
         hdr["Content-Type"] = "application/json"
         req_kw = {"headers": hdr, "json": payload}
@@ -132,6 +180,10 @@ async def refresh_cameras():
         return
     try:
         found, hids = [], []
+        if HOUSE_CFG:
+            for h in HOUSE_CFG.split(","):
+                if h.strip():
+                    hids.append(h.strip())
         for ep in ("/api/address/getSettingsList", "/api/address/getAddressList"):
             st, d = await api_post(ep, None)
             if st == 401:
@@ -146,10 +198,6 @@ async def refresh_cameras():
                     break
         for hid in hids:
             st, cd = await api_post("/api/cctv/all", {"houseId": str(hid)})
-            if st == 200 and cd:
-                found.extend(extract_cams(cd))
-        if not found:
-            st, cd = await api_post("/api/cctv/overview", None)
             if st == 200 and cd:
                 found.extend(extract_cams(cd))
         if not found:
@@ -169,6 +217,7 @@ async def refresh_cameras():
         log.info("Loaded %d cameras (houses: %s)", len(cameras), hids)
     except Exception as e:
         log.error("Refresh error: %s", e)
+
 async def bg_loop():
     while True:
         await refresh_cameras()
@@ -367,8 +416,9 @@ async def on_start(app):
 
 
 async def on_stop(app):
-    if _session and not _session.closed:
-        await _session.close()
+    for s in (_api_session, _stream_session):
+        if s and not s.closed:
+            await s.close()
 
 
 app = web.Application()
@@ -390,5 +440,6 @@ app.on_startup.append(on_start)
 app.on_cleanup.append(on_stop)
 
 if __name__ == "__main__":
-    log.info("Starting Lanta Camera Proxy v2.0.1 on port %d", PORT)
+    log.info("Starting Lanta Camera Proxy v2.0.2 on port %d", PORT)
     web.run_app(app, host="0.0.0.0", port=PORT)
+
