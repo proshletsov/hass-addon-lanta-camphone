@@ -1,5 +1,6 @@
 import asyncio, json, logging, os, re, socket, ssl, time, uuid
 import aiohttp
+from datetime import datetime, timezone, timedelta
 from aiohttp import web
 from aiohttp.abc import AbstractResolver
 
@@ -56,6 +57,52 @@ class LantaResolver(AbstractResolver):
 
     async def close(self):
         pass
+
+
+MSK = timezone(timedelta(hours=3))
+
+
+async def _get_flat_id() -> str:
+    st, d = await api_post("/api/address/getSettingsList", None)
+    if st == 200 and isinstance(d, dict) and isinstance(d.get("data"), list):
+        for f in d["data"]:
+            if f.get("flatId"):
+                return str(f["flatId"])
+    return "27863"
+
+
+async def guest_access(request):
+    flat_id = request.query.get("flatId") or await _get_flat_id()
+    now_msk = datetime.now(MSK)
+
+    if request.method == "POST":
+        body = await _read_input(request) if request.can_read_body else {}
+        enable = body.get("enable", True)
+        if isinstance(enable, str):
+            enable = enable.lower() not in ("false", "0", "off", "no")
+        target = now_msk + (timedelta(hours=1) if enable else timedelta(seconds=-5))
+        dt_str = target.strftime("%Y-%m-%d %H:%M:%S")
+        payload = {"flatId": str(flat_id), "settings": {"autoOpen": dt_str}}
+        st, d = await api_post("/api/address/intercom", payload)
+    else:
+        st, d = await api_post("/api/address/intercom", {"flatId": str(flat_id)})
+
+    data = d.get("data", {}) if isinstance(d, dict) else {}
+    auto_str = data.get("autoOpen", "") if isinstance(data, dict) else ""
+    is_active = False
+    if auto_str:
+        try:
+            exp = datetime.strptime(auto_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=MSK)
+            is_active = exp > datetime.now(MSK)
+        except Exception:
+            pass
+
+    return web.json_response({
+        "is_active": is_active,
+        "autoOpen": auto_str,
+        "flatId": str(flat_id),
+        "status": st,
+    })
 
 
 def norm_phone(p: str) -> str:
@@ -432,6 +479,8 @@ app.add_routes([
     web.post("/auth/tok", auth_tok),
     web.get("/debug_api", debug_api),
     web.post("/refresh", force_ref),
+    web.get("/guest_access", guest_access),
+    web.post("/guest_access", guest_access),
     web.get("/preview/{cam_id}", proxy_preview),
     web.get("/ts/{cam_id}", proxy_ts),
     web.get("/stream/{cam_id}/{path:.+}", proxy_stream),
@@ -440,7 +489,7 @@ app.on_startup.append(on_start)
 app.on_cleanup.append(on_stop)
 
 if __name__ == "__main__":
-    log.info("Starting Lanta Camera Proxy v2.0.2 on port %d", PORT)
+    log.info("Starting Lanta Camera Proxy v2.0.3 on port %d", PORT)
     web.run_app(app, host="0.0.0.0", port=PORT)
 
 
