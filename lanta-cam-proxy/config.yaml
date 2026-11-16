@@ -1,5 +1,5 @@
 name: "Lanta Camera Proxy"
-version: "2.0.0"
+version: "2.0.1"
 slug: "lanta-cam-proxy-local"
 description: "Прокси камер LanTa (mobile.lanta-net.ru) по звонку и токену"
 arch:
