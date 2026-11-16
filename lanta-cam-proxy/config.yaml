@@ -1,8 +1,7 @@
 name: "Lanta Camera Proxy"
-version: "1.7.0"
-slug: "lanta-cam-proxy"
-description: "Прокси-сервер камер видеонаблюдения LanTa с автоматическим обновлением токенов"
-url: "https://github.com/amatsnev/hass-addon-lanta-cam"
+version: "2.0.0"
+slug: "lanta-cam-proxy-local"
+description: "Прокси камер LanTa (mobile.lanta-net.ru) по звонку и токену"
 arch:
   - amd64
   - aarch64
@@ -10,15 +9,12 @@ startup: services
 init: false
 ports:
   8199/tcp: 8199
-ports_description:
-  8199/tcp: "Web UI / HLS stream proxy"
 options:
-  login: ""
-  password: ""
+  phone: ""
+  bearer_token: ""
   refresh_interval: 5400
 schema:
-  login: str
-  password: str
+  phone: str?
+  bearer_token: str?
   refresh_interval: int
 panel_icon: mdi:cctv
-startup: services
