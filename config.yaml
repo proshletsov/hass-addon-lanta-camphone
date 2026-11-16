@@ -1,0 +1,20 @@
+name: "Lanta Camera Proxy"
+version: "2.0.0"
+slug: "lanta-cam-proxy-local"
+description: "Прокси камер LanTa (mobile.lanta-net.ru) по звонку и токену"
+arch:
+  - amd64
+  - aarch64
+startup: services
+init: false
+ports:
+  8199/tcp: 8199
+options:
+  phone: ""
+  bearer_token: ""
+  refresh_interval: 5400
+schema:
+  phone: str?
+  bearer_token: str?
+  refresh_interval: int
+panel_icon: mdi:cctv
