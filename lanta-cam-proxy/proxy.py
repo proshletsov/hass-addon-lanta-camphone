@@ -63,7 +63,8 @@ async def http_sess() -> aiohttp.ClientSession:
             connector=aiohttp.TCPConnector(ssl=ssl_ctx),
             headers={
                 "Origin": API_BASE,
-                "Referer": f"{API_BASE}/",
+                "Referer": f"{API_BASE}/addresses",
+                "Accept": "application/json, text/plain, */*",
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/130.0.0.0",
             },
         )
@@ -72,17 +73,21 @@ async def http_sess() -> aiohttp.ClientSession:
 
 async def api_post(path: str, payload: dict | None = None):
     tok = state.get("token", "").strip()
-    hdr = {
-        "Authorization": f"Bearer {tok}" if tok else "Bearer",
-        "Content-Type": "application/json",
-    }
+    hdr = {"Authorization": f"Bearer {tok}" if tok else "Bearer"}
     s = await http_sess()
-    async with s.post(f"{API_BASE}{path}", headers=hdr, json=payload or {}) as r:
+    if payload is None:
+        req_kw = {"headers": hdr}
+    else:
+        hdr["Content-Type"] = "application/json"
+        req_kw = {"headers": hdr, "json": payload}
+    async with s.post(f"{API_BASE}{path}", **req_kw) as r:
         txt = await r.text()
         try:
             return r.status, (json.loads(txt) if txt else {})
         except Exception:
-            return r.status, {"raw": txt}
+            return r.status, {"raw": txt[:300]}
+
+
 def extract_cams(node, prefix="", out=None):
     if out is None:
         out = []
@@ -92,13 +97,23 @@ def extract_cams(node, prefix="", out=None):
     elif isinstance(node, dict):
         u = node.get("url") or node.get("hls") or node.get("link_video")
         if isinstance(u, str) and u.startswith("http"):
+            u_clean = u.rstrip("/")
+            cam_tok = node.get("token", "")
             cid = node.get("id") or node.get("cameraId")
             nm = node.get("name") or node.get("title") or f"Cam {cid}"
+            if ".m3u8" in u_clean:
+                vid = u_clean
+            elif cam_tok:
+                vid = f"{u_clean}/index.m3u8?token={cam_tok}"
+            else:
+                vid = f"{u_clean}/index.m3u8"
             prv = node.get("shot") or node.get("preview") or node.get("screenshot") or ""
+            if not prv:
+                prv = f"{u_clean}/preview.jpg?token={cam_tok}" if cam_tok else f"{u_clean}/preview.jpg"
             out.append({
                 "id": cid,
                 "title": f"{prefix} {nm}".strip(),
-                "video": u,
+                "video": vid,
                 "preview": prv,
             })
         else:
@@ -117,42 +132,33 @@ async def refresh_cameras():
         return
     try:
         found, hids = [], []
-        for ep in ("/api/address/getAddressList", "/api/address/getSettingsList"):
-            st, d = await api_post(ep)
+        for ep in ("/api/address/getSettingsList", "/api/address/getAddressList"):
+            st, d = await api_post(ep, None)
             if st == 401:
                 log.error("Token unauthorized (401). Update token at /auth.")
                 return
             if st == 200 and isinstance(d, dict) and isinstance(d.get("data"), list):
-                hids = [a.get("houseId") for a in d["data"] if a.get("houseId")]
+                for a in d["data"]:
+                    hid = a.get("houseId")
+                    if hid and str(hid) not in hids:
+                        hids.append(str(hid))
                 if hids:
                     break
-        if hids:
-            for hid in dict.fromkeys(hids):
-                for ep in ("/api/cctv/all", "/api/cctv/allTree"):
-                    st, cd = await api_post(ep, {"houseId": hid})
-                    if st == 200 and cd:
-                        c = extract_cams(cd)
-                        if c:
-                            found.extend(c)
-                            break
+        for hid in hids:
+            st, cd = await api_post("/api/cctv/all", {"houseId": str(hid)})
+            if st == 200 and cd:
+                found.extend(extract_cams(cd))
         if not found:
-            for ep in ("/api/cctv/all", "/api/cctv/allTree", "/api/cctv/overview"):
-                st, cd = await api_post(ep)
-                if st == 200 and cd:
-                    found.extend(extract_cams(cd))
+            st, cd = await api_post("/api/cctv/overview", None)
+            if st == 200 and cd:
+                found.extend(extract_cams(cd))
         if not found:
-            log.warning("0 cameras returned. Open /debug_api to inspect response.")
+            log.warning("0 cameras returned. Check /debug_api (hids=%s)", hids)
             return
 
-        new_cams, used = {}, set()
+        new_cams = {}
         for i, it in enumerate(found, 1):
-            try:
-                cid = int(it["id"])
-            except Exception:
-                cid = i
-            while cid in used:
-                cid += 10000
-            used.add(cid)
+            cid = int(it["id"]) if str(it["id"]).isdigit() else i
             new_cams[cid] = {
                 "title": it["title"],
                 "link_video": it["video"],
@@ -160,11 +166,9 @@ async def refresh_cameras():
             }
         cameras = new_cams
         last_refresh = time.time()
-        log.info("Loaded %d cameras", len(cameras))
+        log.info("Loaded %d cameras (houses: %s)", len(cameras), hids)
     except Exception as e:
         log.error("Refresh error: %s", e)
-
-
 async def bg_loop():
     while True:
         await refresh_cameras()
@@ -241,17 +245,14 @@ async def auth_tok(request):
         await refresh_cameras()
         raise web.HTTPFound(f"/auth?msg=Токен_сохранен_Камер_{len(cameras)}")
     raise web.HTTPFound("/auth?msg=Пустой_токен")
+
+
 async def debug_api(request):
     res = {}
-    eps = (
-        "/api/address/getAddressList",
-        "/api/cctv/all",
-        "/api/cctv/allTree",
-        "/api/cctv/overview",
-    )
-    for ep in eps:
-        st, d = await api_post(ep)
-        res[ep] = {"status": st, "data": d}
+    st1, d1 = await api_post("/api/address/getSettingsList", None)
+    res["getSettingsList"] = {"status": st1, "data": d1}
+    st2, d2 = await api_post("/api/address/getAddressList", None)
+    res["getAddressList"] = {"status": st2, "data": d2}
     return web.json_response(res)
 
 
@@ -262,7 +263,7 @@ async def list_cams(request):
         res.append({
             "id": k,
             "title": v["title"],
-            "stream": f"http://{h}/stream/{k}/index.fmp4.m3u8",
+            "stream": f"http://{h}/stream/{k}/index.m3u8",
             "ts": f"http://{h}/ts/{k}",
             "preview": f"http://{h}/preview/{k}",
         })
@@ -283,11 +284,11 @@ async def go2rtc_cfg(request):
 
 async def proxy_stream(request):
     cid = int(request.match_info["cam_id"])
-    path = request.match_info.get("path", "index.fmp4.m3u8")
+    path = request.match_info.get("path", "index.m3u8")
     if cid not in cameras:
         return web.Response(status=404, text="Not found")
     u_path, _, qs = cameras[cid]["link_video"].partition("?")
-    base = u_path.rsplit("/", 1)[0]
+    base = os.path.dirname(u_path)
     url = f"{base}/{path}?{qs}" if qs else f"{base}/{path}"
     s = await http_sess()
     async with s.get(url) as r:
@@ -296,7 +297,7 @@ async def proxy_stream(request):
             if cid not in cameras:
                 return web.Response(status=404, text="Lost after refresh")
             u_path, _, qs = cameras[cid]["link_video"].partition("?")
-            base = u_path.rsplit("/", 1)[0]
+            base = os.path.dirname(u_path)
             url = f"{base}/{path}?{qs}" if qs else f"{base}/{path}"
             r = await s.get(url)
         body = await r.read()
@@ -315,10 +316,7 @@ async def proxy_preview(request):
     if not cam or not cam.get("preview_url"):
         return web.Response(status=404)
     s = await http_sess()
-    hdr = {}
-    if cam["preview_url"].startswith(API_BASE):
-        hdr = {"Authorization": f"Bearer {state['token']}"}
-    async with s.get(cam["preview_url"], headers=hdr) as r:
+    async with s.get(cam["preview_url"]) as r:
         ctype = r.headers.get("Content-Type", "image/jpeg")
         return web.Response(body=await r.read(), content_type=ctype)
 
@@ -392,5 +390,5 @@ app.on_startup.append(on_start)
 app.on_cleanup.append(on_stop)
 
 if __name__ == "__main__":
-    log.info("Starting Lanta Camera Proxy v2.0 on port %d", PORT)
+    log.info("Starting Lanta Camera Proxy v2.0.1 on port %d", PORT)
     web.run_app(app, host="0.0.0.0", port=PORT)
