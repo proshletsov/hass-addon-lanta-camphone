@@ -2,7 +2,7 @@
 
 Прокси-сервер для камер видеонаблюдения и домофонов провайдера **ЛанТа** (`mobile.lanta-net.ru`) с авторизацией по звонку или токену.
 
-> Форк оригинальной надстройки [amatsnev/hass-addon-lanta-cam](https://github.com). Полное руководство с примерами карточек и автоматизаций смотрите в файле [INSTALL.md](https://github.com).
+> Форк оригинальной надстройки [amatsnev/hass-addon-lanta-cam]([https://github.com](https://github.com/amatsnev/hass-addon-lanta-cam)). Полное руководство с примерами карточек и автоматизаций смотрите в файле [INSTALL.md]([https://github.com](https://github.com/proshletsov/hass-addon-lanta-camphone/blob/main/INSTALL.md)).
 
 ---
 
