@@ -8,10 +8,8 @@ FFMPEG = os.environ.get("FFMPEG_PATH", "ffmpeg")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("lanta-proxy")
 
-# Нормальный SSL контекст с поддержкой SNI (чтобы nginx открывал именно mobile.lanta-net.ru, а не lanta-net.ru!)
 api_ssl = ssl.create_default_context()
 
-# Для видеосерверов fl4/fl7 с самоподписанными/неполными цепочками оставляем мягкий SSL
 stream_ssl = ssl.create_default_context()
 stream_ssl.check_hostname = False
 stream_ssl.verify_mode = ssl.CERT_NONE
@@ -23,6 +21,7 @@ API_BASE = f"https://{API_HOST}"
 PHONE_CFG = os.environ.get("LANTA_PHONE", "").strip()
 TOKEN_CFG = os.environ.get("LANTA_TOKEN", "").strip()
 HOUSE_CFG = os.environ.get("LANTA_HOUSE_ID", "").strip()
+FLAT_CFG = os.environ.get("LANTA_FLAT_ID", "").strip()
 REFRESH_INT = int(os.environ.get("TOKEN_REFRESH_INTERVAL", "5400"))
 PORT = int(os.environ.get("PORT", "8199"))
 STATE_FILE = "/data/lanta_auth.json"
@@ -63,16 +62,28 @@ MSK = timezone(timedelta(hours=3))
 
 
 async def _get_flat_id() -> str:
-    st, d = await api_post("/api/address/getSettingsList", None)
-    if st == 200 and isinstance(d, dict) and isinstance(d.get("data"), list):
-        for f in d["data"]:
-            if f.get("flatId"):
-                return str(f["flatId"])
-    return "27863"
+    if FLAT_CFG:
+        return FLAT_CFG
+    for ep in ("/api/address/getSettingsList", "/api/address/getAddressList"):
+        st, d = await api_post(ep, None)
+        if st == 200 and isinstance(d, dict) and isinstance(d.get("data"), list):
+            for f in d["data"]:
+                if f.get("flatId"):
+                    return str(f["flatId"])
+    return ""
 
 
 async def guest_access(request):
     flat_id = request.query.get("flatId") or await _get_flat_id()
+    if not flat_id:
+        return web.json_response(
+            {
+                "is_active": False,
+                "error": "flatId not found. Set flat_id in add-on configuration or pass ?flatId=...",
+            },
+            status=400,
+        )
+
     now_msk = datetime.now(MSK)
 
     if request.method == "POST":
@@ -264,6 +275,7 @@ async def refresh_cameras():
         log.info("Loaded %d cameras (houses: %s)", len(cameras), hids)
     except Exception as e:
         log.error("Refresh error: %s", e)
+
 
 async def bg_loop():
     while True:
@@ -489,7 +501,5 @@ app.on_startup.append(on_start)
 app.on_cleanup.append(on_stop)
 
 if __name__ == "__main__":
-    log.info("Starting Lanta Camera Proxy v2.0.3 on port %d", PORT)
+    log.info("Starting Lanta Camera Proxy v2.0.4 on port %d", PORT)
     web.run_app(app, host="0.0.0.0", port=PORT)
-
-
