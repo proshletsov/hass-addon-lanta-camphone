@@ -1,5 +1,5 @@
 name: "Lanta Camera Proxy"
-version: "2.0.3"
+version: "2.0.4"
 slug: "lanta-cam-proxy-local"
 description: "Прокси камер LanTa (mobile.lanta-net.ru) по звонку и токену"
 arch:
@@ -12,11 +12,13 @@ ports:
 options:
   phone: ""
   bearer_token: ""
-  house_id: "7629"
+  house_id: ""
+  flat_id: ""
   refresh_interval: 5400
 schema:
   phone: str?
   bearer_token: str?
   house_id: str?
+  flat_id: str?
   refresh_interval: int
 panel_icon: mdi:cctv
