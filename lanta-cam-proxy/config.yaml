@@ -1,12 +1,14 @@
 name: "Lanta Camera Proxy"
-version: "2.0.4"
+version: "2.1.0"
 slug: "lanta-cam-proxy-local"
-description: "Прокси камер LanTa (mobile.lanta-net.ru) по звонку и токену"
+description: "Прокси камер LanTa (mobile.lanta-net.ru) + домофон через MQTT Auto-Discovery"
 arch:
   - amd64
   - aarch64
 startup: services
 init: false
+services:
+  - "mqtt:need"
 ports:
   8199/tcp: 8199
 options:
@@ -15,10 +17,22 @@ options:
   house_id: ""
   flat_id: ""
   refresh_interval: 5400
+  plog_poll_interval: 7
+  dedup_window: 180
+  mqtt_host: ""
+  mqtt_port: 1883
+  mqtt_user: ""
+  mqtt_pass: ""
 schema:
   phone: str?
   bearer_token: str?
   house_id: str?
   flat_id: str?
   refresh_interval: int
+  plog_poll_interval: int
+  dedup_window: int
+  mqtt_host: str?
+  mqtt_port: int?
+  mqtt_user: str?
+  mqtt_pass: password?
 panel_icon: mdi:cctv
