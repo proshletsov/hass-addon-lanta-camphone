@@ -1,8 +1,26 @@
-#!/bin/sh
+#!/usr/bin/with-contenv sh
 export LANTA_PHONE=$(jq -r '.phone // empty' /data/options.json)
 export LANTA_TOKEN=$(jq -r '.bearer_token // empty' /data/options.json)
 export LANTA_HOUSE_ID=$(jq -r '.house_id // empty' /data/options.json)
 export LANTA_FLAT_ID=$(jq -r '.flat_id // empty' /data/options.json)
 export TOKEN_REFRESH_INTERVAL=$(jq -r '.refresh_interval // 5400' /data/options.json)
 export PORT=8199
+export PLOG_POLL_INTERVAL=$(jq -r '.plog_poll_interval // 7' /data/options.json)
+export DEDUP_WINDOW=$(jq -r '.dedup_window // 180' /data/options.json)
+
+# MQTT: если host не задан вручную — берём параметры брокера у Supervisor
+MQTT_HOST=$(jq -r '.mqtt_host // empty' /data/options.json)
+MQTT_PORT=$(jq -r '.mqtt_port // empty' /data/options.json)
+MQTT_USER=$(jq -r '.mqtt_user // empty' /data/options.json)
+MQTT_PASS=$(jq -r '.mqtt_pass // empty' /data/options.json)
+
+if [ -z "$MQTT_HOST" ] && [ -n "$SUPERVISOR_TOKEN" ]; then
+  MQTT_JSON=$(curl -sS --max-time 10 -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/services/mqtt)
+  MQTT_HOST=$(echo "$MQTT_JSON" | jq -r '.data.host // .host // empty')
+  MQTT_PORT=$(echo "$MQTT_JSON" | jq -r '.data.port // .port // 1883')
+  MQTT_USER=$(echo "$MQTT_JSON" | jq -r '.data.username // .username // empty')
+  MQTT_PASS=$(echo "$MQTT_JSON" | jq -r '.data.password // .password // empty')
+fi
+
+export MQTT_HOST MQTT_PORT MQTT_USER MQTT_PASS
 exec python3 /proxy.py
